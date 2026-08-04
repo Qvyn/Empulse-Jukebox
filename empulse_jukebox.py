@@ -320,6 +320,7 @@ class AudioEngine(QObject):
         self._music_transitioning = False
         self._music_advance_pending = False
         self._stinger_loading = False
+        self._resume_music_after_stinger = False
         self._fade_direction = 0
         self._fade_timer = QTimer(self)
         self._fade_timer.setInterval(40)
@@ -398,6 +399,18 @@ class AudioEngine(QObject):
         if not entry:
             self.playback_changed.emit(f"No playable file assigned to {SLOT_LABELS[slot]}")
             return False
+        if (
+            is_stinger
+            and not self._stinger_loading
+            and self.stinger_player.playbackState()
+            != QMediaPlayer.PlaybackState.PlayingState
+        ):
+            self._resume_music_after_stinger = (
+                self.music_player.playbackState()
+                == QMediaPlayer.PlaybackState.PlayingState
+            )
+            if self._resume_music_after_stinger:
+                self.music_player.pause()
         absolute_path = str(Path(entry["path"]).resolve())
         source = QUrl.fromLocalFile(absolute_path)
         if not is_stinger:
@@ -482,6 +495,11 @@ class AudioEngine(QObject):
                 self._stinger_seek_pending = 0
             self._stinger_loading = False
             self.stinger_player.play()
+        if status in {
+            QMediaPlayer.MediaStatus.EndOfMedia,
+            QMediaPlayer.MediaStatus.InvalidMedia,
+        }:
+            self._finish_stinger()
 
     def _music_position_changed(self, position: int) -> None:
         if not self.current_entry or self._music_transitioning:
@@ -508,7 +526,15 @@ class AudioEngine(QObject):
         end = self.stinger_entry.get("end_ms", 0)
         if end and position >= end:
             self.stinger_player.stop()
-            self.stinger_entry = None
+            self._finish_stinger()
+
+    def _finish_stinger(self) -> None:
+        self.stinger_entry = None
+        self._stinger_loading = False
+        if self._resume_music_after_stinger:
+            self._resume_music_after_stinger = False
+            if self.current_entry and not self.music_player.source().isEmpty():
+                self.music_player.play()
 
     def _media_error(self, _error, message: str) -> None:
         self.playback_changed.emit(f"Audio error: {message or 'Windows could not decode this file'}")
@@ -546,6 +572,7 @@ class AudioEngine(QObject):
         self._music_transitioning = False
         self._music_advance_pending = False
         self._stinger_loading = False
+        self._resume_music_after_stinger = False
         self.music_player.stop()
         self.stinger_player.stop()
         self.track_changed.emit("Nothing playing")
