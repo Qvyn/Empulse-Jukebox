@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
 
 from empulse_events import EmpulseEventParser
 from jukebox_tracks import format_time, normalize_entry, parse_time
+from audio_analysis import AnalysisResult, AudioAnalyzer
+from waveform_widget import WaveformWidget
 
 
 APP_NAME = "EMPULSE Jukebox"
@@ -45,7 +47,12 @@ SLOT_LABELS = {
     "double_kill": "Double Kill stinger",
     "triple_kill": "Triple Kill stinger",
     "quad_kill": "Quad Kill stinger",
+    "penta_kill": "Penta Kill stinger",
+    "hexa_kill": "Hexa Kill stinger",
     "five_kill": "5 Kill Streak stinger",
+    "ten_kill": "10 Kill Streak stinger",
+    "fifteen_kill": "15 Kill Streak stinger",
+    "twenty_kill": "20 Kill Streak stinger",
 }
 CONTEXT_SLOTS = {"menu", "pre_match", "in_match", "practice", "post_match"}
 SUPPORTED_AUDIO = "Audio files (*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.wma);;All files (*)"
@@ -343,6 +350,13 @@ class AudioEngine(QObject):
             return
         if slot == self.current_slot and not force and not self.pending_slot:
             return
+        # A real context transition supersedes a short kill event. Never resume
+        # stale in-match audio after returning to post-match or the menu.
+        if self.stinger_entry or self._stinger_loading:
+            self._resume_music_after_stinger = False
+            self.stinger_player.stop()
+            self.stinger_entry = None
+            self._stinger_loading = False
         self._queue_music(slot)
 
     def _queue_music(self, slot: str) -> None:
@@ -589,6 +603,10 @@ class MainWindow(QMainWindow):
         self.current_mode = ""
         self.current_state = "offline"
         self.game_running = False
+        self.analysis_cache: dict[str, AnalysisResult] = {}
+        self.analyzer = AudioAnalyzer(self)
+        self.analyzer.finished.connect(self._analysis_finished)
+        self.analyzer.failed.connect(self._analysis_failed)
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1060, 680)
         self.resize(1180, 760)
@@ -677,6 +695,10 @@ class MainWindow(QMainWindow):
         self.track_list.currentRowChanged.connect(self._track_selected)
         right.addWidget(self.track_list, 1)
 
+        self.waveform = WaveformWidget()
+        self.waveform.rangeChanged.connect(self._waveform_range_changed)
+        right.addWidget(self.waveform)
+
         timestamp_row = QHBoxLayout()
         timestamp_row.addWidget(QLabel("Start position"))
         self.start_time = QLineEdit("0:00.000")
@@ -699,12 +721,15 @@ class MainWindow(QMainWindow):
         remove_button = QPushButton("REMOVE")
         clear_button = QPushButton("CLEAR")
         preview_button = QPushButton("▶  PLAY CHANNEL")
+        analyze_button = QPushButton("ANALYZE + ASSIGN")
         preview_button.setObjectName("accentButton")
+        analyze_button.setObjectName("accentButton")
         add_button.clicked.connect(self._add_tracks)
         remove_button.clicked.connect(self._remove_tracks)
         clear_button.clicked.connect(self._clear_tracks)
         preview_button.clicked.connect(self._preview_slot)
-        for button in (add_button, remove_button, clear_button, preview_button):
+        analyze_button.clicked.connect(self._analyze_and_assign)
+        for button in (add_button, remove_button, clear_button, preview_button, analyze_button):
             track_buttons.addWidget(button)
         right.addLayout(track_buttons)
 
@@ -873,10 +898,63 @@ class MainWindow(QMainWindow):
         if not (0 <= row < len(tracks)):
             self.start_time.setText("0:00.000")
             self.end_time.clear()
+            self.waveform.set_range(0, 0)
             return
         entry = normalize_entry(tracks[row])
         self.start_time.setText(format_time(entry["start_ms"]))
         self.end_time.setText(format_time(entry["end_ms"], blank_zero=True))
+        result = self.analysis_cache.get(entry["path"])
+        if result:
+            self.waveform.set_waveform(result.envelope, result.duration_ms)
+        else:
+            self.waveform.set_waveform([], 0)
+        self.waveform.set_range(entry["start_ms"], entry["end_ms"])
+
+    def _waveform_range_changed(self, start: int, end: int) -> None:
+        self.start_time.setText(format_time(start))
+        self.end_time.setText(format_time(end, blank_zero=True))
+
+    def _analyze_and_assign(self) -> None:
+        row = self.track_list.currentRow()
+        tracks = self.settings.data["slots"].get(self.selected_slot, [])
+        if 0 <= row < len(tracks):
+            path = normalize_entry(tracks[row])["path"]
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Analyze and assign a song", "", SUPPORTED_AUDIO
+            )
+        if not path:
+            return
+        self.detail_status.setText(f"Analyzing {Path(path).name}…")
+        self.analyzer.analyze(path)
+
+    def _analysis_finished(self, result: AnalysisResult) -> None:
+        self.analysis_cache[result.path] = result
+        for slot, (start, end) in result.assignments.items():
+            tracks = self.settings.data["slots"][slot]
+            replacement = {"path": result.path, "start_ms": start, "end_ms": end}
+            existing = next(
+                (index for index, raw in enumerate(tracks)
+                 if normalize_entry(raw)["path"] == result.path),
+                -1,
+            )
+            if existing >= 0:
+                tracks[existing] = replacement
+            else:
+                tracks.append(replacement)
+        self.settings.save()
+        self._refresh_slots()
+        self._slot_changed(self.slot_list.currentRow())
+        self.detail_status.setText("Analysis complete — suggested segments assigned")
+        QMessageBox.information(
+            self,
+            "Segments assigned",
+            "Suggested ranges were added to every channel. Select any channel to preview or adjust its waveform markers.",
+        )
+
+    def _analysis_failed(self, message: str) -> None:
+        self.detail_status.setText("Analysis failed")
+        QMessageBox.warning(self, "Audio analysis failed", message)
 
     def _save_timestamps(self) -> None:
         row = self.track_list.currentRow()
@@ -897,6 +975,7 @@ class MainWindow(QMainWindow):
         entry["start_ms"] = start
         entry["end_ms"] = end
         tracks[row] = entry
+        self.waveform.set_range(start, end)
         self._save_and_refresh(selected_track=row)
 
     def _add_tracks(self) -> None:

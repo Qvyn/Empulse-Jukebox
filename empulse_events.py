@@ -114,7 +114,7 @@ class EmpulseEventParser:
             self._waiting_for_live_play = False
 
         streak = re.search(
-            r"LogMedalTv:.*(?:event )?(Double Kill|Triple Kill|Quad Kill|5 Kill Streak)",
+            r"LogMedalTv:.*(?:event )?(?<!\d)(Double Kill|Triple Kill|Quad Kill|Penta Kill|Hexa Kill|(?:20|15|10|5) Kill Streak)",
             line,
             re.IGNORECASE,
         )
@@ -123,7 +123,12 @@ class EmpulseEventParser:
                 "double kill": "double_kill",
                 "triple kill": "triple_kill",
                 "quad kill": "quad_kill",
+                "penta kill": "penta_kill",
+                "hexa kill": "hexa_kill",
                 "5 kill streak": "five_kill",
+                "10 kill streak": "ten_kill",
+                "15 kill streak": "fifteen_kill",
+                "20 kill streak": "twenty_kill",
             }[streak.group(1).lower()]
             events.append(EmpulseEvent("stinger", normalized))
 
