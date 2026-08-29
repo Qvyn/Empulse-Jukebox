@@ -185,7 +185,15 @@ class FinalsLogWatcher(core.LogWatcher):
 
     def _prime_from_existing_log(self) -> None:
         if not self.path.exists():
-            self.connection_changed.emit(False, "Game detected; waiting for a usable Discovery game log")
+            # Log availability is separate from process availability. The core
+            # EMPULSE watcher used one signal for both, which could mark a live
+            # game offline merely because its expected log file was absent.
+            self.connection_changed.emit(
+                self._was_running,
+                "THE FINALS detected; usable game log not found"
+                if self._was_running
+                else "Waiting for THE FINALS",
+            )
             return
         super()._prime_from_existing_log()
 
