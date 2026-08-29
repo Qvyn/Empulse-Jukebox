@@ -78,7 +78,7 @@ def _enumerate_process_names() -> list[str]:
                 ("dwSize", wintypes.DWORD),
                 ("cntUsage", wintypes.DWORD),
                 ("th32ProcessID", wintypes.DWORD),
-                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("dw32DefaultHeapID", ctypes.c_size_t),
                 ("th32ModuleID", wintypes.DWORD),
                 ("cntThreads", wintypes.DWORD),
                 ("th32ParentProcessID", wintypes.DWORD),
@@ -145,7 +145,6 @@ class FinalsProcessWatcher(core.LogWatcher):
         self.process_timer.start()
 
     def set_path(self, _path: str) -> None:
-        # Kept only because the shared UI knows this method exists.
         return
 
     def poll(self) -> None:
@@ -182,6 +181,8 @@ class FinalsMainWindow(core.MainWindow):
         )
         self.detector.state_changed.connect(self._screen_state_changed)
         self.detector.status_changed.connect(self._screen_status_changed)
+        if self.current_state in CONTEXT_SLOTS:
+            self.detector.set_current_state(self.current_state)
         self._refresh_reference_button_text()
         if self.game_running:
             self.detector.start()
@@ -207,8 +208,6 @@ class FinalsMainWindow(core.MainWindow):
                 checkbox.setText("Follow THE FINALS automatically")
 
     def _build_screen_detector_controls(self) -> None:
-        # Repurpose the old log toolbar from the shared EMPULSE UI rather than
-        # carrying a dead Discovery.log field in THE FINALS version.
         toolbar = self.log_path.parentWidget()
         layout = toolbar.layout() if toolbar else None
         self.log_path.hide()
@@ -232,8 +231,6 @@ class FinalsMainWindow(core.MainWindow):
             layout.addWidget(self.learn_screen_button)
             layout.addWidget(self.clear_screen_button)
 
-        # Keep reference counts synchronized when the user selects another
-        # channel in the existing left-hand list.
         self.slot_list.currentRowChanged.connect(
             lambda _row: self._refresh_reference_button_text()
         )
@@ -296,15 +293,17 @@ class FinalsMainWindow(core.MainWindow):
 
         if self.detector:
             if online:
+                if self.current_state in CONTEXT_SLOTS:
+                    self.detector.set_current_state(self.current_state)
                 self.detector.start()
             else:
                 self.detector.stop()
 
-        # Until the detector has learned references, Main Menu is still the
-        # least surprising startup context. A visual match replaces it later.
         if online and had_no_context and self.current_state == "offline":
             self.current_state = "menu"
             self.state_label.setText("State: Main Menu")
+            if self.detector:
+                self.detector.set_current_state("menu")
             if self.auto_play.isChecked() and self.game_running:
                 self.audio.context("menu")
 
@@ -318,7 +317,6 @@ class FinalsMainWindow(core.MainWindow):
             QApplication.instance().quit()
 
 
-# Patch only the reusable core seams before Settings/MainWindow are created.
 core.APP_NAME = APP_NAME
 core.SLOT_LABELS = SLOT_LABELS
 core.CONTEXT_SLOTS = CONTEXT_SLOTS
