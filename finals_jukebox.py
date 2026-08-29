@@ -78,7 +78,7 @@ def _enumerate_process_names() -> list[str]:
                 ("dwSize", wintypes.DWORD),
                 ("cntUsage", wintypes.DWORD),
                 ("th32ProcessID", wintypes.DWORD),
-                ("dw32DefaultHeapID", ctypes.c_size_t),
+                ("th32DefaultHeapID", ctypes.c_size_t),
                 ("th32ModuleID", wintypes.DWORD),
                 ("cntThreads", wintypes.DWORD),
                 ("th32ParentProcessID", wintypes.DWORD),
@@ -181,10 +181,12 @@ class FinalsMainWindow(core.MainWindow):
         )
         self.detector.state_changed.connect(self._screen_state_changed)
         self.detector.status_changed.connect(self._screen_status_changed)
-        if self.current_state in CONTEXT_SLOTS:
-            self.detector.set_current_state(self.current_state)
         self._refresh_reference_button_text()
         if self.game_running:
+            # The audio UI may be using Main Menu as a harmless startup fallback,
+            # but the visual classifier stays uncommitted until it sees a real
+            # confident state. This also lets the app be launched mid-match.
+            self.detector.set_current_state("")
             self.detector.start()
 
     def _apply_finals_branding(self) -> None:
@@ -293,8 +295,9 @@ class FinalsMainWindow(core.MainWindow):
 
         if self.detector:
             if online:
-                if self.current_state in CONTEXT_SLOTS:
-                    self.detector.set_current_state(self.current_state)
+                # A new game process gets a fresh visual state. Do not constrain
+                # the first match based on whatever context the previous run used.
+                self.detector.set_current_state("")
                 self.detector.start()
             else:
                 self.detector.stop()
@@ -302,8 +305,6 @@ class FinalsMainWindow(core.MainWindow):
         if online and had_no_context and self.current_state == "offline":
             self.current_state = "menu"
             self.state_label.setText("State: Main Menu")
-            if self.detector:
-                self.detector.set_current_state("menu")
             if self.auto_play.isChecked() and self.game_running:
                 self.audio.context("menu")
 
