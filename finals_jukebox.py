@@ -238,6 +238,29 @@ class FinalsMainWindow(core.MainWindow):
             if checkbox.text() == "Follow EMPULSE automatically":
                 checkbox.setText("Follow THE FINALS automatically")
 
+    def _connection_changed(self, online: bool, message: str) -> None:
+        """Keep process detection and jukebox context synchronized at startup."""
+        had_no_context = self.current_state == "offline"
+        core.MainWindow._connection_changed(self, online, message)
+
+        # THE FINALS can be fully running at its front end without emitting one
+        # of our conservative state markers. In that case, 'offline' is not a
+        # useful jukebox state: establish Main Menu as the safe startup context.
+        # A later queue/load/live/post-match log event will replace it normally.
+        if online and had_no_context and self.current_state == "offline":
+            self.current_state = "menu"
+            try:
+                self.watcher.parser.state = "menu"
+            except AttributeError:
+                pass
+            self.state_label.setText("State: Main Menu")
+            details = " / ".join(
+                part for part in (self.current_mode, self.current_map) if part
+            )
+            self.detail_status.setText(details)
+            if self.auto_play.isChecked() and self.game_running:
+                self.audio.context("menu")
+
     def _browse_log(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
