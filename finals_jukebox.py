@@ -1,7 +1,7 @@
 """THE FINALS Jukebox prototype.
 
 This deliberately reuses EMPULSE Jukebox's mature audio/UI implementation while
-swapping only the game-specific detector and branding.  It is a separate desktop
+swapping only the game-specific detector and branding. It is a separate desktop
 application and does not inject into, hook, read memory from, or modify THE FINALS.
 """
 
@@ -13,7 +13,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QCheckBox, QLabel
 
 import empulse_jukebox as core
@@ -94,6 +93,15 @@ def _enumerate_process_names() -> list[str]:
             ]
 
         kernel32 = ctypes.windll.kernel32
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
         snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
         if snapshot == ctypes.c_void_p(-1).value:
             return names
