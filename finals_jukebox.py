@@ -55,14 +55,42 @@ def default_log_path() -> Path:
     return discovery_logs_dir() / "Discovery.log"
 
 
+def _looks_like_game_log(path: Path) -> bool:
+    """Reject CEF/browser logs and prefer Unreal/Discovery game logs."""
+    name = path.name.lower()
+    if name.startswith("cef") or "chromium" in name or "chrome" in name:
+        return False
+    if name.startswith("discovery"):
+        return True
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            sample = handle.read(96 * 1024).lower()
+    except OSError:
+        return False
+    unreal_markers = (
+        "loginit:",
+        "logload:",
+        "lognet:",
+        "logworld:",
+        "logonline",
+        "loggame",
+        "loadmap:",
+        "bringing world",
+    )
+    return any(marker in sample for marker in unreal_markers)
+
+
 def newest_discovery_log() -> Path:
     folder = discovery_logs_dir()
     preferred = default_log_path()
-    if preferred.exists():
+    if preferred.exists() and _looks_like_game_log(preferred):
         return preferred
     if not folder.exists():
         return preferred
-    candidates = [path for path in folder.glob("*.log") if path.is_file()]
+    candidates = [
+        path for path in folder.glob("*.log")
+        if path.is_file() and _looks_like_game_log(path)
+    ]
     if not candidates:
         return preferred
     try:
@@ -121,7 +149,9 @@ def _enumerate_process_names() -> list[str]:
 
 def finals_is_running() -> bool:
     names = _enumerate_process_names()
-    known = {"discovery.exe", "d-discovery.exe", "e-discovery.exe"}
+    # Current builds launch one of the -d / -e Win64 binaries behind the
+    # Discovery.exe bootstrapper. Keep all three for patch-to-patch changes.
+    known = {"discovery.exe", "discovery-d.exe", "discovery-e.exe"}
     if any(name in known for name in names):
         return True
     # Harmless fallback: process-name text only. No process handle is opened.
@@ -143,16 +173,19 @@ def finals_is_running() -> bool:
 
 class FinalsLogWatcher(core.LogWatcher):
     def start(self) -> None:
-        # If the configured default does not exist, follow the newest .log in
-        # Discovery/Saved/Logs. User-selected custom paths are left untouched.
+        # Migrate the prototype's bad cef*.log auto-selection and otherwise
+        # choose only a file that looks like an Unreal/Discovery game log.
         configured = Path(self.path)
-        if not configured.exists() and configured.parent == discovery_logs_dir():
+        in_default_folder = configured.parent == discovery_logs_dir()
+        invalid_auto_log = in_default_folder and configured.exists() and not _looks_like_game_log(configured)
+        missing_default_log = in_default_folder and not configured.exists()
+        if invalid_auto_log or missing_default_log:
             self.path = newest_discovery_log()
         super().start()
 
     def _prime_from_existing_log(self) -> None:
         if not self.path.exists():
-            self.connection_changed.emit(False, "Waiting for Discovery log")
+            self.connection_changed.emit(False, "Game detected; waiting for a usable Discovery game log")
             return
         super()._prime_from_existing_log()
 
